@@ -8,39 +8,42 @@ from sqlalchemy.orm import DeclarativeBase
 
 from shared.config import settings
 
-# 1. Intercept and surgically clean 'sslmode' from the connection string
+# 1. Clean 'sslmode' from the connection string securely
 db_url = settings.DATABASE_URL
-has_ssl = "sslmode=" in db_url
+has_ssl = "sslmode" in db_url
 
 if has_ssl:
     parsed_url = urlparse(db_url)
-    # Convert query string to a list of key-value pairs
     query_params = parse_qsl(parsed_url.query)
-    
-    # Filter out 'sslmode' but KEEP everything else (like Neon's routing options)
+    # Strip any sslmode key out completely
     filtered_params = [param for param in query_params if param[0] != 'sslmode']
-    
-    # Rebuild the URL without sslmode
     new_query = urlencode(filtered_params)
     db_url = urlunparse(parsed_url._replace(query=new_query))
 
 # 2. Re-inject safe secure connection parameters
 connect_args = {}
-if has_ssl:
+if has_ssl or "render.com" in db_url or "neon.tech" in db_url:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     connect_args["ssl"] = ctx
 
-# 3. Create engine with sanitized parameters and your original pool settings
+# 3. Create engine with an absolute fallback safety check
 engine = create_async_engine(
     db_url,
     echo=settings.APP_ENV == "development",
     pool_size=10,
     max_overflow=20,
-    pool_pre_ping=True,          # detect stale connections
-    connect_args=connect_args,   # Injected here
+    pool_pre_ping=True,          
+    connect_args=connect_args,   
 )
+
+# Deep fallback: Intercept the dialect connect method to guarantee no 'sslmode' bypasses
+@engine.events.register("do_connect")
+def receive_do_connect(dialect, conn_rec, cargs, cparams):
+    # If asyncpg tries to ingest sslmode implicitly via configuration dictionaries, pop it
+    cparams.pop("sslmode", None)
+
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
