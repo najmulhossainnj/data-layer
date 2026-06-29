@@ -3,6 +3,7 @@ from typing import AsyncGenerator
 import ssl
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
+from sqlalchemy import event  # Added standard event module
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -28,7 +29,7 @@ if has_ssl or "render.com" in db_url or "neon.tech" in db_url:
     ctx.verify_mode = ssl.CERT_NONE
     connect_args["ssl"] = ctx
 
-# 3. Create engine with an absolute fallback safety check
+# 3. Create engine with your pool settings
 engine = create_async_engine(
     db_url,
     echo=settings.APP_ENV == "development",
@@ -38,11 +39,12 @@ engine = create_async_engine(
     connect_args=connect_args,   
 )
 
-# Deep fallback: Intercept the dialect connect method to guarantee no 'sslmode' bypasses
-@engine.events.register("do_connect")
+# 4. Deep fallback safety check
+# We bind the listener to engine.sync_engine because AsyncEngine doesn't have an events attribute
 def receive_do_connect(dialect, conn_rec, cargs, cparams):
-    # If asyncpg tries to ingest sslmode implicitly via configuration dictionaries, pop it
     cparams.pop("sslmode", None)
+
+event.listen(engine.sync_engine, "do_connect", receive_do_connect)
 
 
 AsyncSessionLocal = async_sessionmaker(
