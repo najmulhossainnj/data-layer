@@ -1,19 +1,28 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 import ssl
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from shared.config import settings
 
-# 1. Intercept and clean the connection string
+# 1. Intercept and surgically clean 'sslmode' from the connection string
 db_url = settings.DATABASE_URL
 has_ssl = "sslmode=" in db_url
 
 if has_ssl:
-    # Chop off '?sslmode=...' so asyncpg doesn't crash on keywords
-    db_url = db_url.split("?")[0]
+    parsed_url = urlparse(db_url)
+    # Convert query string to a list of key-value pairs
+    query_params = parse_qsl(parsed_url.query)
+    
+    # Filter out 'sslmode' but KEEP everything else (like Neon's routing options)
+    filtered_params = [param for param in query_params if param[0] != 'sslmode']
+    
+    # Rebuild the URL without sslmode
+    new_query = urlencode(filtered_params)
+    db_url = urlunparse(parsed_url._replace(query=new_query))
 
 # 2. Re-inject safe secure connection parameters
 connect_args = {}
